@@ -1,0 +1,8 @@
+google-api-python-client==2.177.0
+google-auth==2.40.3
+azure-identity==1.23.1
+azure-purview-catalog==1.0.0b4
+microsoft-agents-a365-observability-core>=0.6.0
+office365-rest-python-client==2.6.2
+python-dotenv==1.1.1
+requests==2.32.4
