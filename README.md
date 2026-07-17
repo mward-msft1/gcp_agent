@@ -1,53 +1,62 @@
-# GCP Document Routing Agent
+# GCP Document Routing Agent (Beginner Step-by-Step Guide)
 
-This project is a Python agent scaffold that can inventory documents from **SharePoint** and **Google Drive**, ask which file to send, and send that file by email through **Microsoft Graph**. It also supports **Purview classification lookup** and **Agent365 observability**.
+This guide is written for beginners. Follow it exactly, one step at a time.
 
 ## What this agent does
 
-1. Lists documents from SharePoint and Google Drive.
-2. Optionally enriches each file with Purview metadata.
-3. Prompts for:
-   - which file to attach
-   - destination email address
-   - subject
-4. Applies outbound policy checks (for example: blocked labels to external domains).
-5. Sends email with attachment via Graph.
+1. Reads files from your SharePoint folder.
+2. Reads files from your Google Drive folder.
+3. Shows all found files and asks which one to send.
+4. Asks where to send the file.
+5. Sends the selected file as an email attachment through Microsoft Graph.
+6. Optionally checks Purview labels and blocks external send based on policy.
 
-## SDKs included
+## SDKs used in this repository
 
-- **Entra ID SDK**: `azure-identity`
-- **Purview SDK**: `azure-purview-catalog`
-- **Microsoft 365/SharePoint SDK**: `office365-rest-python-client`
-- **Agent 365 SDK**: `microsoft-agents-a365-observability-core`
-- **Google Drive SDK**: `google-api-python-client`
+1. Entra ID SDK: `azure-identity`
+2. Purview SDK: `azure-purview-catalog`
+3. Microsoft 365 / SharePoint SDK: `office365-rest-python-client`
+4. Agent 365 SDK: `microsoft-agents-a365-observability-core`
+5. Google Drive SDK: `google-api-python-client`
 
-## Architecture
+## Before you start
 
-- `SharePointClient`: SharePoint inventory + file download
-- `GoogleDriveClient`: Drive inventory + file download
-- `PurviewClient`: Purview discovery query for metadata labels
-- `GraphEmailClient`: Graph `sendMail` with attachment
-- `DocumentRoutingAgent`: end-to-end orchestration and policy enforcement
-- `configure_a365_observability`: Agent365 tracing bootstrap
+You need:
 
-## Environments supported
+1. A Microsoft 365 tenant where you are admin (or can get admin help).
+2. A Google Cloud project where you can create service accounts.
+3. A local computer (Windows, macOS, or Linux) with Python 3.11+.
 
-- **Environment A (Local PC)**: run the agent interactively from your machine.
-- **Environment B (Google Cloud / third-party hosting)**: run the same workload in GCP while using your own Microsoft 365 tenant as the external system-under-test.
+---
 
-> Current implementation is interactive CLI (`input()` prompts).  
-> For fully managed Google AI conversations (chat endpoints), keep this business logic and place it behind a Google ADK/Agent runtime HTTP wrapper.
+## Part A - Local computer setup
 
-## 1) Local PC prerequisites
+### Step A1: Install required tools
 
-Install these tools:
+Install:
 
-1. Python 3.11+ (`python3 --version`)
-2. Git (`git --version`)
-3. pip + virtualenv support
-4. Optional for cloud deployment: Google Cloud SDK (`gcloud --version`)
+1. Python 3.11 or newer
+2. Git
+3. (Optional now, required for cloud deploy later) Google Cloud SDK (`gcloud`)
 
-Install Python dependencies:
+Check installs:
+
+```bash
+python3 --version
+git --version
+gcloud --version
+```
+
+### Step A2: Download the repository
+
+```bash
+git clone https://github.com/mward-msft1/gcp_agent.git
+cd gcp_agent
+```
+
+### Step A3: Create Python environment and install packages
+
+macOS/Linux:
 
 ```bash
 python3 -m venv .venv
@@ -56,115 +65,228 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-## 2) Microsoft 365 tenant setup (your own tenant)
+Windows (PowerShell):
 
-Create one Entra app registration for this agent:
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
 
-1. Entra admin center -> **App registrations** -> **New registration**
-2. Create a **client secret**
-3. Add **Application permissions** in Microsoft Graph:
-   - `Mail.Send`
-   - `Sites.Read.All`
-   - `Files.Read.All`
-   - `User.Read.All`
-4. Click **Grant admin consent**
-5. Record:
-   - Tenant ID
-   - Client ID
-   - Client secret
+---
 
-Required data-plane setup:
+## Part B - Microsoft 365 setup (your tenant)
 
-1. SharePoint: identify site URL and folder server-relative path.
-2. Exchange Online: create/choose sender mailbox (`GRAPH_SENDER_UPN`) with permission to send.
-3. Purview (optional): ensure your app identity can query Purview catalog endpoint.
+### Step B1: Create Entra app registration
 
-## 3) Google Drive setup
+1. Open Entra admin center.
+2. Go to **App registrations** -> **New registration**.
+3. Name it (example: `gcp-document-routing-agent`).
+4. Click **Register**.
 
-1. In Google Cloud, create a service account.
+### Step B2: Create client secret
+
+1. Open your new app.
+2. Go to **Certificates & secrets**.
+3. Create **New client secret**.
+4. Copy the secret value immediately and save it safely.
+
+### Step B3: Add Microsoft Graph permissions
+
+Add **Application** permissions:
+
+1. `Mail.Send`
+2. `Sites.Read.All`
+3. `Files.Read.All`
+4. `User.Read.All`
+
+Then click **Grant admin consent**.
+
+### Step B4: Save these values
+
+You need these for `.env`:
+
+1. Tenant ID
+2. Client ID
+3. Client Secret
+
+### Step B5: SharePoint and mailbox details
+
+Get:
+
+1. `SHAREPOINT_SITE_URL` (example: `https://contoso.sharepoint.com/sites/YourSite`)
+2. `SHAREPOINT_FOLDER_SERVER_RELATIVE` (example: `/sites/YourSite/Shared Documents`)
+3. `GRAPH_SENDER_UPN` (mailbox to send from, example: `automation@contoso.com`)
+
+Optional:
+
+1. `PURVIEW_ENDPOINT` if using Purview.
+
+---
+
+## Part C - Google setup
+
+### Step C1: Create service account
+
+1. Open Google Cloud Console.
+2. Create/select a project.
+3. Go to **IAM & Admin** -> **Service Accounts**.
+4. Create a service account.
+
+### Step C2: Enable Drive API
+
+1. Go to **APIs & Services**.
 2. Enable **Google Drive API**.
-3. Create/download service account key JSON.
-4. Share target Drive folder/files with that service account.
-5. Save the folder ID for `GOOGLE_DRIVE_FOLDER_ID`.
 
-## 4) Configure environment variables
+### Step C3: Create key file
 
-Copy the template:
+1. Open your service account.
+2. Create a JSON key.
+3. Download the JSON key file to your local machine.
+4. Save its full path.
+
+### Step C4: Share Drive folder
+
+1. Open Google Drive.
+2. Share the target folder with the service account email.
+3. Copy the folder ID from the URL.
+
+---
+
+## Part D - Configure the agent
+
+### Step D1: Create `.env`
 
 ```bash
 cp .env.example .env
 ```
 
-Set all required values in `.env`:
+### Step D2: Fill in `.env`
 
-- Entra credentials (`ENTRA_*`)
-- SharePoint details (`SHAREPOINT_*`)
-- Graph sender (`GRAPH_SENDER_UPN`)
-- Google service account file and folder ID
-- Optional Purview endpoint
-- Policy controls:
-  - `ALLOWED_RECIPIENT_DOMAINS`
-  - `BLOCKED_PURVIEW_LABELS`
-- Agent365 observability flags
+Open `.env` and set all values:
 
-## 5) Run locally
+1. `ENTRA_TENANT_ID`
+2. `ENTRA_CLIENT_ID`
+3. `ENTRA_CLIENT_SECRET`
+4. `SHAREPOINT_SITE_URL`
+5. `SHAREPOINT_FOLDER_SERVER_RELATIVE`
+6. `GRAPH_SENDER_UPN`
+7. `GOOGLE_DRIVE_SERVICE_ACCOUNT_FILE`
+8. `GOOGLE_DRIVE_FOLDER_ID`
+9. `PURVIEW_ENDPOINT` (optional)
+10. `ALLOWED_RECIPIENT_DOMAINS`
+11. `BLOCKED_PURVIEW_LABELS`
+12. `ENABLE_A365_OBSERVABILITY`
+13. `OBSERVABILITY_SERVICE_NAME`
+14. `OBSERVABILITY_SERVICE_NAMESPACE`
+
+---
+
+## Part E - Run locally
+
+1. Activate virtual environment.
+2. Run:
 
 ```bash
-source .venv/bin/activate
 python main.py
 ```
 
-You should see document inventory, then prompts for file selection and recipient.
+3. Follow prompts:
+   1. choose file number
+   2. enter recipient email
+   3. enter subject (or leave blank)
 
-## 6) Third-party Google Cloud deployment (for tenant testing)
+---
 
-Use this when you want the agent hosted outside Microsoft (GCP) and connected to your Microsoft 365 tenant as a third-party system.
+## Part F - Use this as a true third-party Google-hosted agent
 
-1. Create/select a GCP project.
-2. Enable APIs:
-   - Cloud Run Admin API
-   - Cloud Build API
-   - Artifact Registry API
-   - Secret Manager API
-   - IAM API
-3. Store secrets in Secret Manager:
-   - Entra client secret
-   - Google service account JSON (or mount as a secure file)
-4. Deploy runtime (example with source deploy):
-   ```bash
-   gcloud run deploy document-routing-agent \
-     --source . \
-     --region us-central1 \
-     --platform managed
-   ```
-5. Inject environment variables/secrets into Cloud Run service.
-6. Verify outbound access from Cloud Run to:
-   - `graph.microsoft.com`
-   - SharePoint tenant endpoints
-   - Purview endpoint (if used)
-   - Google Drive APIs
+This means your code runs in Google Cloud, but it connects to Microsoft 365 in your tenant.
 
-## 7) Building this into Google AI Platform agent workflows
+### Step F1: Prepare Google Cloud project
 
-To make this a true Google AI Platform agent (instead of local CLI prompts):
+Enable these APIs:
 
-1. Keep this repository as the **integration/action layer** (SharePoint, Purview, Graph, Drive).
-2. Wrap `DocumentRoutingAgent` logic in ADK-compatible tool handlers (or HTTP endpoints).
-3. Use Google AI/ADK orchestrator to:
-   - call an inventory tool
-   - present choices to the user
-   - call a send tool with selected document + recipient
-4. Host that orchestrator in GCP (Cloud Run or your chosen runtime) and keep secrets in Secret Manager.
-5. Run test scenarios against your own Microsoft 365 tenant for third-party validation.
+1. Cloud Run Admin API
+2. Cloud Build API
+3. Artifact Registry API
+4. Secret Manager API
+5. IAM API
 
-## 8) Validation checklist for your tenant test
+### Step F2: Store secrets safely
 
-1. Inventory returns SharePoint + Drive files.
-2. Purview labels appear for files when endpoint is configured.
-3. External recipient block works for restricted labels.
-4. Allowed recipient receives email + correct attachment.
-5. Graph sent-items log confirms send operation.
+Put secrets in Secret Manager:
 
-## Environment variable reference
+1. Entra client secret
+2. Google service account JSON
+3. Any other sensitive values
 
-See `.env.example` for the canonical list and names.
+### Step F3: Deploy to Cloud Run
+
+```bash
+gcloud run deploy document-routing-agent \
+  --source . \
+  --region us-central1 \
+  --platform managed
+```
+
+### Step F4: Add environment variables in Cloud Run
+
+Set the same `.env` values in Cloud Run service configuration.
+
+### Step F5: Confirm network access
+
+Your Cloud Run service must reach:
+
+1. `graph.microsoft.com`
+2. your SharePoint tenant endpoints
+3. Purview endpoint (if used)
+4. Google Drive API
+
+---
+
+## Part G - Build on Google AI Platform / ADK
+
+Current code is CLI-interactive. To turn this into a conversational Google AI agent:
+
+1. Keep this repo as your integration layer.
+2. Wrap inventory/send logic as ADK tools or HTTP actions.
+3. In your Google AI agent flow:
+   1. call inventory tool
+   2. show file choices to user
+   3. call send tool with selected file + recipient
+4. Host that orchestrator in GCP and keep secrets in Secret Manager.
+
+---
+
+## Quick test checklist
+
+1. Agent starts without errors.
+2. SharePoint files are listed.
+3. Google Drive files are listed.
+4. File selection prompt appears.
+5. Email sends with attachment.
+6. Purview label appears when configured.
+7. External send block works for restricted labels.
+
+---
+
+## Important safety notes
+
+1. Never commit your `.env` file.
+2. Never commit your Google service account JSON key.
+3. Rotate secrets regularly.
+4. Use least-privilege permissions in both Microsoft and Google.
+
+---
+
+## Main project files
+
+1. `main.py` - starts the agent
+2. `src/gcp_agent/agent.py` - workflow logic
+3. `src/gcp_agent/auth.py` - Entra auth
+4. `src/gcp_agent/sharepoint_client.py` - SharePoint access
+5. `src/gcp_agent/google_drive_client.py` - Drive access
+6. `src/gcp_agent/purview_client.py` - Purview lookup
+7. `src/gcp_agent/email_client.py` - Graph email sending
+8. `.env.example` - all environment variables
