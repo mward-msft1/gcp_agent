@@ -15,6 +15,11 @@ class Settings:
     purview_endpoint: str | None = None
     allowed_recipient_domains: tuple[str, ...] = ()
     blocked_purview_labels: tuple[str, ...] = ("confidential", "secret", "restricted")
+    enable_purview_policy_enforcement: bool = False
+    purview_default_user_id: str | None = None
+    purview_app_name: str = "DocumentRoutingAgent"
+    purview_ignore_exceptions: bool = False
+    purview_ignore_payment_required: bool = False
     enable_a365_observability: bool = True
     observability_service_name: str = "DocumentRoutingAgent"
     observability_service_namespace: str = "GCPAgent"
@@ -40,6 +45,7 @@ class Settings:
             return value in {"1", "true", "yes", "on"}
 
         purview_endpoint = os.getenv("PURVIEW_ENDPOINT", "").strip() or None
+        purview_default_user_id = os.getenv("PURVIEW_DEFAULT_USER_ID", "").strip() or None
         sender_upn = require("GRAPH_SENDER_UPN")
         sender_domain = sender_upn.rsplit("@", 1)[-1].lower()
         allowed_domains = parse_csv("ALLOWED_RECIPIENT_DOMAINS")
@@ -59,6 +65,11 @@ class Settings:
             allowed_recipient_domains=allowed_domains,
             blocked_purview_labels=parse_csv("BLOCKED_PURVIEW_LABELS")
             or ("confidential", "secret", "restricted"),
+            enable_purview_policy_enforcement=parse_bool("ENABLE_PURVIEW_POLICY_ENFORCEMENT", False),
+            purview_default_user_id=purview_default_user_id,
+            purview_app_name=os.getenv("PURVIEW_APP_NAME", "DocumentRoutingAgent"),
+            purview_ignore_exceptions=parse_bool("PURVIEW_IGNORE_EXCEPTIONS", False),
+            purview_ignore_payment_required=parse_bool("PURVIEW_IGNORE_PAYMENT_REQUIRED", False),
             enable_a365_observability=parse_bool("ENABLE_A365_OBSERVABILITY", True),
             observability_service_name=os.getenv("OBSERVABILITY_SERVICE_NAME", "DocumentRoutingAgent"),
             observability_service_namespace=os.getenv("OBSERVABILITY_SERVICE_NAMESPACE", "GCPAgent"),

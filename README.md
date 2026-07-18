@@ -10,14 +10,17 @@ This guide is written for beginners. Follow it exactly, one step at a time.
 4. Asks where to send the file.
 5. Sends the selected file as an email attachment through Microsoft Graph.
 6. Optionally checks Purview labels and blocks external send based on policy.
+7. Optionally runs Purview policy middleware enforcement before send.
 
 ## SDKs used in this repository
 
 1. Entra ID SDK: `azure-identity`
-2. Purview SDK: `azure-purview-catalog`
-3. Microsoft 365 / SharePoint SDK: `office365-rest-python-client`
-4. Agent 365 SDK: `microsoft-agents-a365-observability-core`
-5. Google Drive SDK: `google-api-python-client`
+2. Purview catalog SDK: `azure-purview-catalog`
+3. Purview policy middleware SDK: `agent-framework-purview` (from Microsoft Agent Framework)
+4. Microsoft Agent Framework core SDK: `agent-framework`
+5. Microsoft 365 / SharePoint SDK: `office365-rest-python-client`
+6. Agent 365 SDK: `microsoft-agents-a365-observability-core`
+7. Google Drive SDK: `google-api-python-client`
 
 ## Before you start
 
@@ -26,6 +29,72 @@ You need:
 1. A Microsoft 365 tenant where you are admin (or can get admin help).
 2. A Google Cloud project where you can create service accounts.
 3. A local computer (Windows, macOS, or Linux) with Python 3.11+.
+
+---
+
+## Copy/Paste Quick Start (for first run)
+
+Use this if you want the fastest path to run locally.
+
+### macOS/Linux quick start
+
+```bash
+git clone https://github.com/mward-msft1/gcp_agent.git
+cd gcp_agent
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+cp .env.example .env
+```
+
+Then open `.env`, fill your real values, and run:
+
+```bash
+python main.py
+```
+
+### Windows PowerShell quick start
+
+```powershell
+git clone https://github.com/mward-msft1/gcp_agent.git
+cd gcp_agent
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+copy .env.example .env
+```
+
+Then open `.env`, fill your real values, and run:
+
+```powershell
+python main.py
+```
+
+### Copy/paste `.env` starter (replace every placeholder)
+
+```env
+ENTRA_TENANT_ID=your-tenant-id
+ENTRA_CLIENT_ID=your-client-id
+ENTRA_CLIENT_SECRET=your-client-secret
+SHAREPOINT_SITE_URL=https://contoso.sharepoint.com/sites/YourSite
+SHAREPOINT_FOLDER_SERVER_RELATIVE=/sites/YourSite/Shared Documents
+GRAPH_SENDER_UPN=automation@contoso.com
+GOOGLE_DRIVE_SERVICE_ACCOUNT_FILE=/absolute/path/to/service-account.json
+GOOGLE_DRIVE_FOLDER_ID=your-google-drive-folder-id
+PURVIEW_ENDPOINT=
+ALLOWED_RECIPIENT_DOMAINS=contoso.com
+BLOCKED_PURVIEW_LABELS=confidential,secret,restricted
+ENABLE_PURVIEW_POLICY_ENFORCEMENT=false
+PURVIEW_DEFAULT_USER_ID=
+PURVIEW_APP_NAME=DocumentRoutingAgent
+PURVIEW_IGNORE_EXCEPTIONS=false
+PURVIEW_IGNORE_PAYMENT_REQUIRED=false
+ENABLE_A365_OBSERVABILITY=true
+OBSERVABILITY_SERVICE_NAME=DocumentRoutingAgent
+OBSERVABILITY_SERVICE_NAMESPACE=GCPAgent
+```
 
 ---
 
@@ -103,7 +172,17 @@ Add **Application** permissions:
 
 Then click **Grant admin consent**.
 
-### Step B4: Save these values
+### Step B4: Add Purview policy permissions (required for middleware enforcement)
+
+If you set `ENABLE_PURVIEW_POLICY_ENFORCEMENT=true`, add these Graph application permissions too:
+
+1. `ProtectionScopes.Compute.All`
+2. `Content.Process.All`
+3. `ContentActivity.Write`
+
+Then click **Grant admin consent** again.
+
+### Step B5: Save these values
 
 You need these for `.env`:
 
@@ -111,7 +190,7 @@ You need these for `.env`:
 2. Client ID
 3. Client Secret
 
-### Step B5: SharePoint and mailbox details
+### Step B6: SharePoint and mailbox details
 
 Get:
 
@@ -122,6 +201,7 @@ Get:
 Optional:
 
 1. `PURVIEW_ENDPOINT` if using Purview.
+2. A real Entra user object ID (GUID) for `PURVIEW_DEFAULT_USER_ID` when policy enforcement is enabled.
 
 ---
 
@@ -177,9 +257,28 @@ Open `.env` and set all values:
 9. `PURVIEW_ENDPOINT` (optional)
 10. `ALLOWED_RECIPIENT_DOMAINS`
 11. `BLOCKED_PURVIEW_LABELS`
-12. `ENABLE_A365_OBSERVABILITY`
-13. `OBSERVABILITY_SERVICE_NAME`
-14. `OBSERVABILITY_SERVICE_NAMESPACE`
+12. `ENABLE_PURVIEW_POLICY_ENFORCEMENT`
+13. `PURVIEW_DEFAULT_USER_ID`
+14. `PURVIEW_APP_NAME`
+15. `PURVIEW_IGNORE_EXCEPTIONS`
+16. `PURVIEW_IGNORE_PAYMENT_REQUIRED`
+17. `ENABLE_A365_OBSERVABILITY`
+18. `OBSERVABILITY_SERVICE_NAME`
+19. `OBSERVABILITY_SERVICE_NAMESPACE`
+
+### Step D3: Enable strict Purview policy middleware (recommended for customer handoff)
+
+Set:
+
+```env
+ENABLE_PURVIEW_POLICY_ENFORCEMENT=true
+PURVIEW_DEFAULT_USER_ID=<entra-user-object-id-guid>
+PURVIEW_APP_NAME=DocumentRoutingAgent
+PURVIEW_IGNORE_EXCEPTIONS=false
+PURVIEW_IGNORE_PAYMENT_REQUIRED=false
+```
+
+This enables Purview policy checks using the Microsoft Agent Framework Purview middleware model before email send.
 
 ---
 
@@ -268,6 +367,7 @@ Current code is CLI-interactive. To turn this into a conversational Google AI ag
 5. Email sends with attachment.
 6. Purview label appears when configured.
 7. External send block works for restricted labels.
+8. Purview middleware blocks sends when your tenant policy says "block".
 
 ---
 
@@ -288,5 +388,6 @@ Current code is CLI-interactive. To turn this into a conversational Google AI ag
 4. `src/gcp_agent/sharepoint_client.py` - SharePoint access
 5. `src/gcp_agent/google_drive_client.py` - Drive access
 6. `src/gcp_agent/purview_client.py` - Purview lookup
-7. `src/gcp_agent/email_client.py` - Graph email sending
-8. `.env.example` - all environment variables
+7. `src/gcp_agent/purview_policy_enforcer.py` - Purview middleware policy enforcement
+8. `src/gcp_agent/email_client.py` - Graph email sending
+9. `.env.example` - all environment variables

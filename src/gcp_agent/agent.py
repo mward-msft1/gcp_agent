@@ -6,6 +6,7 @@ from .email_client import GraphEmailClient
 from .google_drive_client import GoogleDriveClient
 from .models import DocumentItem
 from .purview_client import PurviewClient
+from .purview_policy_enforcer import PurviewPolicyEnforcer
 from .sharepoint_client import SharePointClient
 
 
@@ -30,6 +31,7 @@ class DocumentRoutingAgent:
         )
         self._email = GraphEmailClient(sender_upn=settings.graph_sender_upn, token_provider=token_provider)
         self._purview = PurviewClient(settings.purview_endpoint, token_provider) if settings.purview_endpoint else None
+        self._purview_policy_enforcer = PurviewPolicyEnforcer(settings, token_provider)
 
     def run_interactive(self) -> None:
         documents = self._inventory_documents()
@@ -43,6 +45,7 @@ class DocumentRoutingAgent:
         self._enforce_send_policy(selected, recipient)
 
         attachment = self._download_document(selected)
+        self._enforce_purview_middleware_policy(selected, recipient, attachment)
         self._email.send_with_attachment(
             recipient_email=recipient,
             subject=subject,
@@ -116,3 +119,17 @@ class DocumentRoutingAgent:
                 f"Blocked by policy: document label '{selected.purview_label}' "
                 f"cannot be sent to external domain '{recipient_domain}'."
             )
+
+    def _enforce_purview_middleware_policy(self, selected: DocumentItem, recipient: str, attachment: bytes) -> None:
+        decoded_attachment = attachment.decode("utf-8", errors="ignore")
+        content_preview = decoded_attachment[:20000]
+        policy_payload = (
+            f"Operation: send email attachment\n"
+            f"Document name: {selected.name}\n"
+            f"Document source: {selected.source}\n"
+            f"Recipient: {recipient}\n"
+            f"Purview label: {selected.purview_label or 'none'}\n"
+            f"Document content preview:\n{content_preview}"
+        )
+        conversation_id = f"{selected.source}:{selected.doc_id}:{recipient}"
+        self._purview_policy_enforcer.enforce_outbound_content(policy_payload, conversation_id)
