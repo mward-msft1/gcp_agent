@@ -308,6 +308,8 @@ cd path\to\gcp_agent
 .\scripts\Create-DlpPolicyForCustomAIApps.ps1
 ```
 
+If any required value is missing, the script prompts you for it and then continues.
+
 When prompted:
 1. Sign in to **Microsoft Graph** (for app creation).
 2. Sign in to **Security & Compliance PowerShell** (for DLP policy creation).
@@ -544,6 +546,8 @@ source .venv/bin/activate
 python main.py
 ```
 
+If required environment values are missing, `main.py` prompts you for them and then continues.
+
 ### Step E3 — Follow the prompts
 
 The agent will:
@@ -602,6 +606,8 @@ python purview_test.py
 .venv\Scripts\Activate.ps1
 python purview_test.py
 ```
+
+If `PURVIEW_CLIENT_APP_ID` (or certificate fields when cert mode is enabled) is missing, `purview_test.py` prompts you for the value and then continues.
 
 A **browser window will open** (first time only) so you can sign in with your Microsoft 365 account. This is normal — it is using interactive browser authentication.
 

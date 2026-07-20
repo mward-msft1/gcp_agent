@@ -1,38 +1,7 @@
 """Purview policy enforcement validation test.
 
-Run this script BEFORE using the main agent to verify that your Microsoft
-365 tenant's Purview DLP policies are working correctly with the Agent
-Framework middleware pattern.
-
-This is adapted directly from:
-  https://github.com/microsoft/agent-framework/tree/main/python/samples/05-end-to-end/purview_agent
-
-It runs three message scenarios:
-  1. good (cold cache)   - a normal safe message
-  2. expected block      - a message containing a test credit card number
-  3. good (warm cache)   - another normal message to confirm recovery
-
-NOTE: The "expected block" will only show BLOCKED if your tenant has a
-Purview DLP policy configured for "Microsoft 365 Copilot and AI apps"
-that targets the Credit Card sensitive info type with a BLOCK action.
-Without that policy, all three messages show ALLOWED – that is normal.
-
-Required environment variables
---------------------------------
-PURVIEW_CLIENT_APP_ID      Your Entra app registration client ID
-                           (needs Graph delegated permissions for Purview)
-
-Optional environment variables
---------------------------------
-PURVIEW_USE_CERT_AUTH      Set to "true" to use certificate auth instead
-                           of the browser pop-up
-PURVIEW_TENANT_ID          Tenant GUID (required when cert auth is true)
-PURVIEW_CERT_PATH          Full path to your .pfx certificate file
-PURVIEW_CERT_PASSWORD      Certificate password (if encrypted)
-PURVIEW_DEFAULT_USER_ID    Entra user object-ID GUID for policy evaluation
-FOUNDRY_PROJECT_ENDPOINT   Azure AI Foundry endpoint (required to run
-                           the full agent middleware scenarios)
-FOUNDRY_MODEL              Model deployment name (default: gpt-4o-mini)
+Run this script before using the main agent to verify your Microsoft 365
+tenant Purview DLP setup using the Agent Framework middleware pattern.
 """
 
 import asyncio
@@ -43,29 +12,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ---------------------------------------------------------------------------
-# Test prompts (same as the reference sample)
-# ---------------------------------------------------------------------------
-
 AGENT_NAME = "DocumentPolicyChecker"
 AGENT_INSTRUCTIONS = "You are a helpful assistant. Keep responses concise."
-
 GOOD_PROMPT_PRIMARY = "Tell me a joke about a pirate."
 SENSITIVE_PROMPT = "My corporate credit card is 4111 1111 1111 1111. Please confirm receipt."
 GOOD_PROMPT_FOLLOWUP = "Another light joke please."
 
 
-# ---------------------------------------------------------------------------
-# Custom cache provider (identical to SimpleDictCacheProvider in the sample)
-# ---------------------------------------------------------------------------
-
 class SimpleDictCacheProvider:
-    """Simple in-memory cache for Purview protection scopes.
-
-    Stores scope responses in a plain dict so they survive a single run.
-    You can replace this with a Redis or Cosmos DB implementation for
-    production use – just implement the same three async methods.
-    """
+    """Simple in-memory cache for Purview protection scopes."""
 
     def __init__(self) -> None:
         self._cache: dict[str, Any] = {}
@@ -90,86 +45,77 @@ class SimpleDictCacheProvider:
         print(f"  [Cache] DEL  {key[:60]}")
 
 
-# ---------------------------------------------------------------------------
-# Credential builder (identical logic to build_credential() in the sample)
-# ---------------------------------------------------------------------------
+def _require_env(
+    name: str,
+    *,
+    default: str | None = None,
+    prompt_text: str | None = None,
+) -> str:
+    value = os.environ.get(name, default)
+    if value:
+        return value
 
-def _require_env(name: str, *, default: str | None = None) -> str:
-    val = os.environ.get(name, default)
-    if not val:
+    entered = input(prompt_text or f"Enter {name}: ").strip()
+    if not entered:
         raise RuntimeError(
             f"Required environment variable not set: {name}\n"
-            f"Add it to your .env file and try again."
+            "Add it to your .env file and try again."
         )
-    return val
+    os.environ[name] = entered
+    return entered
 
 
 def build_credential() -> Any:
-    """Build an Azure credential for Purview authentication.
-
-    Mode 1 – Interactive Browser (default, good for local testing):
-        Set PURVIEW_CLIENT_APP_ID in .env.
-        A browser window will open on first run so you can sign in.
-
-    Mode 2 – Certificate (headless / production):
-        Set PURVIEW_USE_CERT_AUTH=true, PURVIEW_TENANT_ID, PURVIEW_CERT_PATH.
-    """
+    """Build Azure credential for Purview auth."""
     from azure.identity import CertificateCredential, InteractiveBrowserCredential
 
-    client_id = _require_env("PURVIEW_CLIENT_APP_ID")
+    client_id = _require_env(
+        "PURVIEW_CLIENT_APP_ID",
+        prompt_text="Enter PURVIEW_CLIENT_APP_ID (Entra app client id): ",
+    )
     use_cert = os.environ.get("PURVIEW_USE_CERT_AUTH", "false").lower() in ("1", "true", "yes")
 
     if use_cert:
-        tenant_id = _require_env("PURVIEW_TENANT_ID")
-        cert_path = _require_env("PURVIEW_CERT_PATH")
+        tenant_id = _require_env("PURVIEW_TENANT_ID", prompt_text="Enter PURVIEW_TENANT_ID: ")
+        cert_path = _require_env("PURVIEW_CERT_PATH", prompt_text="Enter PURVIEW_CERT_PATH: ")
         cert_password = os.environ.get("PURVIEW_CERT_PASSWORD") or None
         print(f"  Using Certificate auth  tenant={tenant_id}  cert={cert_path}")
-        return CertificateCredential(
-            tenant_id=tenant_id,
-            client_id=client_id,
-            certificate_path=cert_path,
-            password=cert_password.encode() if cert_password else None,
-        )
+        kwargs = {
+            "tenant_id": tenant_id,
+            "client_id": client_id,
+            "certificate_path": cert_path,
+        }
+        if cert_password:
+            kwargs["password"] = cert_password.encode()
+        return CertificateCredential(**kwargs)
 
     print(f"  Using Interactive Browser auth  client_id={client_id}")
     return InteractiveBrowserCredential(client_id=client_id)
 
 
-# ---------------------------------------------------------------------------
-# Policy flow runner (identical to run_policy_flow in the sample)
-# ---------------------------------------------------------------------------
-
 async def run_policy_flow(label: str, agent: Any, user_id: str | None, blocked_text: str) -> None:
-    """Run good → block-candidate → good and print ALLOWED / BLOCKED per message."""
+    """Run good -> block-candidate -> good and print ALLOWED/BLOCKED."""
     from agent_framework import Message
 
     blocked_marker = blocked_text.lower()
     prompts = [
         ("good (cold cache)", GOOD_PROMPT_PRIMARY),
-        ("expected block",    SENSITIVE_PROMPT),
+        ("expected block", SENSITIVE_PROMPT),
         ("good (warm cache)", GOOD_PROMPT_FOLLOWUP),
     ]
     for tag, text in prompts:
-        response = await agent.run(
-            Message("user", [text], additional_properties={"user_id": user_id})
-        )
+        response = await agent.run(Message("user", [text], additional_properties={"user_id": user_id}))
         outcome = "BLOCKED" if blocked_marker in str(response).lower() else "ALLOWED"
         print(f"  [{label}] {tag}: {outcome}")
         print(f"  Response: {str(response)[:120]}\n")
 
 
-# ---------------------------------------------------------------------------
-# Scenario 1 – Agent-level middleware
-# ---------------------------------------------------------------------------
-
 async def run_with_agent_middleware() -> None:
-    """Attach PurviewPolicyMiddleware directly to an Agent (agent-level check)."""
-    print("\n── Scenario 1: Agent Middleware ──────────────────────────────────")
-
+    print("\n-- Scenario 1: Agent Middleware ---------------------------------")
     endpoint = os.environ.get("FOUNDRY_PROJECT_ENDPOINT")
     if not endpoint:
-        print("  SKIPPED – FOUNDRY_PROJECT_ENDPOINT not set.")
-        print("  Add your Azure AI Foundry endpoint to .env to run this scenario.")
+        print("  SKIPPED - FOUNDRY_PROJECT_ENDPOINT not set.")
+        print("  Add it in .env to run this scenario.")
         return
 
     from agent_framework import Agent
@@ -179,27 +125,19 @@ async def run_with_agent_middleware() -> None:
 
     deployment = os.environ.get("FOUNDRY_MODEL", "gpt-4o-mini")
     user_id = os.environ.get("PURVIEW_DEFAULT_USER_ID")
-
     client = FoundryChatClient(model=deployment, project_endpoint=endpoint, credential=AzureCliCredential())
     settings = PurviewSettings(app_name="DocumentRoutingAgent")
     middleware = PurviewPolicyMiddleware(build_credential(), settings)
     agent = Agent(client=client, instructions=AGENT_INSTRUCTIONS, name=AGENT_NAME, middleware=[middleware])
-
     blocked_text = settings.get("blocked_prompt_message") or "Prompt blocked by policy"
     await run_policy_flow("agent middleware", agent, user_id, blocked_text)
 
 
-# ---------------------------------------------------------------------------
-# Scenario 2 – Chat-client-level middleware
-# ---------------------------------------------------------------------------
-
 async def run_with_chat_middleware() -> None:
-    """Attach PurviewChatPolicyMiddleware at the chat client level."""
-    print("\n── Scenario 2: Chat Middleware ───────────────────────────────────")
-
+    print("\n-- Scenario 2: Chat Middleware ----------------------------------")
     endpoint = os.environ.get("FOUNDRY_PROJECT_ENDPOINT")
     if not endpoint:
-        print("  SKIPPED – FOUNDRY_PROJECT_ENDPOINT not set.")
+        print("  SKIPPED - FOUNDRY_PROJECT_ENDPOINT not set.")
         return
 
     from agent_framework import Agent
@@ -209,7 +147,6 @@ async def run_with_chat_middleware() -> None:
 
     deployment = os.environ.get("FOUNDRY_MODEL", "gpt-4o-mini")
     user_id = os.environ.get("PURVIEW_DEFAULT_USER_ID")
-
     settings = PurviewSettings(app_name="DocumentRoutingAgent (Chat)")
     client = FoundryChatClient(
         model=deployment,
@@ -218,22 +155,15 @@ async def run_with_chat_middleware() -> None:
         middleware=[PurviewChatPolicyMiddleware(build_credential(), settings)],
     )
     agent = Agent(client=client, instructions=AGENT_INSTRUCTIONS, name=AGENT_NAME)
-
     blocked_text = settings.get("blocked_prompt_message") or "Prompt blocked by policy"
     await run_policy_flow("chat middleware", agent, user_id, blocked_text)
 
 
-# ---------------------------------------------------------------------------
-# Scenario 3 – Custom cache provider
-# ---------------------------------------------------------------------------
-
 async def run_with_custom_cache() -> None:
-    """Use the SimpleDictCacheProvider to see Cache HIT / MISS traces."""
-    print("\n── Scenario 3: Custom Cache Provider ────────────────────────────")
-
+    print("\n-- Scenario 3: Custom Cache Provider ----------------------------")
     endpoint = os.environ.get("FOUNDRY_PROJECT_ENDPOINT")
     if not endpoint:
-        print("  SKIPPED – FOUNDRY_PROJECT_ENDPOINT not set.")
+        print("  SKIPPED - FOUNDRY_PROJECT_ENDPOINT not set.")
         return
 
     from agent_framework import Agent
@@ -243,28 +173,20 @@ async def run_with_custom_cache() -> None:
 
     deployment = os.environ.get("FOUNDRY_MODEL", "gpt-4o-mini")
     user_id = os.environ.get("PURVIEW_DEFAULT_USER_ID")
-
     client = FoundryChatClient(model=deployment, project_endpoint=endpoint, credential=AzureCliCredential())
     cache = SimpleDictCacheProvider()
     settings = PurviewSettings(app_name="DocumentRoutingAgent (Custom Cache)")
     middleware = PurviewPolicyMiddleware(build_credential(), settings, cache_provider=cache)
     agent = Agent(client=client, instructions=AGENT_INSTRUCTIONS, name=AGENT_NAME, middleware=[middleware])
-
     blocked_text = settings.get("blocked_prompt_message") or "Prompt blocked by policy"
     await run_policy_flow("custom cache", agent, user_id, blocked_text)
 
 
-# ---------------------------------------------------------------------------
-# Scenario 4 – Default built-in cache with explicit TTL/size settings
-# ---------------------------------------------------------------------------
-
 async def run_with_default_cache() -> None:
-    """Use built-in InMemoryCacheProvider with explicit TTL and size limits."""
-    print("\n── Scenario 4: Default Cache (explicit settings) ─────────────────")
-
+    print("\n-- Scenario 4: Default Cache (explicit settings) ----------------")
     endpoint = os.environ.get("FOUNDRY_PROJECT_ENDPOINT")
     if not endpoint:
-        print("  SKIPPED – FOUNDRY_PROJECT_ENDPOINT not set.")
+        print("  SKIPPED - FOUNDRY_PROJECT_ENDPOINT not set.")
         return
 
     from agent_framework import Agent
@@ -274,23 +196,17 @@ async def run_with_default_cache() -> None:
 
     deployment = os.environ.get("FOUNDRY_MODEL", "gpt-4o-mini")
     user_id = os.environ.get("PURVIEW_DEFAULT_USER_ID")
-
     client = FoundryChatClient(model=deployment, project_endpoint=endpoint, credential=AzureCliCredential())
     settings = PurviewSettings(
         app_name="DocumentRoutingAgent (Default Cache)",
         cache_ttl_seconds=3600,
-        max_cache_size_bytes=100 * 1024 * 1024,  # 100 MB
+        max_cache_size_bytes=100 * 1024 * 1024,
     )
     middleware = PurviewPolicyMiddleware(build_credential(), settings)
     agent = Agent(client=client, instructions=AGENT_INSTRUCTIONS, name=AGENT_NAME, middleware=[middleware])
-
     blocked_text = settings.get("blocked_prompt_message") or "Prompt blocked by policy"
     await run_policy_flow("default cache", agent, user_id, blocked_text)
 
-
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
 
 async def main() -> None:
     print("=" * 65)
@@ -298,14 +214,14 @@ async def main() -> None:
     print("  Mirrors: microsoft/agent-framework purview_agent sample")
     print("=" * 65)
 
-    # Check minimum required env var
     if not os.environ.get("PURVIEW_CLIENT_APP_ID"):
-        print(
-            "\n  ERROR: PURVIEW_CLIENT_APP_ID is not set.\n"
-            "  Add it to your .env file and run again.\n"
-            "  See README – Part B2 or Part B8 for how to get it."
-        )
-        return
+        print("\n  PURVIEW_CLIENT_APP_ID is required.")
+        print("  Enter it now, or press Enter to cancel.")
+        entered = input("  PURVIEW_CLIENT_APP_ID: ").strip()
+        if not entered:
+            print("  No value entered. Exiting.")
+            return
+        os.environ["PURVIEW_CLIENT_APP_ID"] = entered
 
     for scenario in [
         run_with_agent_middleware,
@@ -318,14 +234,12 @@ async def main() -> None:
         except Exception as exc:
             print(f"  ERROR in {scenario.__name__}: {exc}\n")
 
-    print("\n── What the results mean ────────────────────────────────────────")
+    print("\n-- What the results mean ---------------------------------------")
     print("  ALLOWED  = content passed Purview evaluation (or no policy configured)")
     print("  BLOCKED  = a DLP policy in your tenant blocked the content")
     print("")
-    print("  If 'expected block' shows ALLOWED, check that your tenant has a")
-    print("  Purview DLP policy for 'Microsoft 365 Copilot and AI apps' with a")
-    print("  BLOCK rule on the 'Credit Card Number' sensitive info type.")
-    print("  See README Part B7 for detailed Purview DLP policy setup steps.")
+    print("  If 'expected block' shows ALLOWED, check your Purview DLP policy setup.")
+    print("  See README Part B7/B8 for policy setup steps.")
 
 
 if __name__ == "__main__":

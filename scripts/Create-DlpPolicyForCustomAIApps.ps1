@@ -80,6 +80,25 @@ function Ensure-Module {
     Import-Module $Name -ErrorAction Stop
 }
 
+function Prompt-RequiredValue {
+    param(
+        [Parameter(Mandatory = $true)][string]$PromptMessage,
+        [string]$DefaultValue = ""
+    )
+    while ($true) {
+        $raw = if ([string]::IsNullOrWhiteSpace($DefaultValue)) {
+            Read-Host $PromptMessage
+        } else {
+            Read-Host "$PromptMessage [$DefaultValue]"
+        }
+        $value = if ([string]::IsNullOrWhiteSpace($raw)) { $DefaultValue } else { $raw }
+        if (-not [string]::IsNullOrWhiteSpace($value)) {
+            return $value.Trim()
+        }
+        Write-Host "A value is required. Please try again." -ForegroundColor Yellow
+    }
+}
+
 function Get-OrCreate-EntraApp {
     param(
         [Parameter(Mandatory = $true)][string]$DisplayName,
@@ -141,7 +160,20 @@ $resolvedTenantId = ""
 $resolvedAppId = ""
 $resolvedSecretText = ""
 
+if ([string]::IsNullOrWhiteSpace($DlpPolicyName)) {
+    $DlpPolicyName = Prompt-RequiredValue -PromptMessage "Enter DLP policy name"
+}
+if ([string]::IsNullOrWhiteSpace($DlpRuleName)) {
+    $DlpRuleName = Prompt-RequiredValue -PromptMessage "Enter DLP rule name"
+}
+if ([string]::IsNullOrWhiteSpace($PurviewAppDisplayName)) {
+    $PurviewAppDisplayName = Prompt-RequiredValue -PromptMessage "Enter Purview app display name"
+}
+
 if ($CreateEntraApp) {
+    $EntraAppDisplayName = Prompt-RequiredValue `
+        -PromptMessage "Enter Entra app registration display name" `
+        -DefaultValue $EntraAppDisplayName
     $appResult = Get-OrCreate-EntraApp `
         -DisplayName $EntraAppDisplayName `
         -CreateSecret $CreateClientSecret `
@@ -153,9 +185,9 @@ if ($CreateEntraApp) {
     $resolvedSecretText = $appResult.SecretText
 }
 else {
-    if ([string]::IsNullOrWhiteSpace($ExistingAppClientId)) {
-        throw "CreateEntraApp is false, but ExistingAppClientId is empty. Set ExistingAppClientId in the script."
-    }
+    $ExistingAppClientId = Prompt-RequiredValue `
+        -PromptMessage "CreateEntraApp is false. Enter existing Entra App (client) ID" `
+        -DefaultValue $ExistingAppClientId
     $resolvedAppId = $ExistingAppClientId
 }
 
