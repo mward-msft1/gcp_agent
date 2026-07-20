@@ -511,7 +511,7 @@ OBSERVABILITY_SERVICE_NAMESPACE=GCPAgent
 
 ### Step D3 — Enable Purview DLP enforcement (recommended before sharing with customers)
 
-Once you have completed Steps B5 and B7, turn on the middleware:
+Once you have completed Step B5 and either Step B7 or Step B8, turn on the middleware:
 
 ```env
 ENABLE_PURVIEW_POLICY_ENFORCEMENT=true
