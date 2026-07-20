@@ -1,8 +1,11 @@
 google-api-python-client==2.177.0
 google-auth==2.40.3
+agent-framework>=1.11.0
+agent-framework-foundry>=1.10.1
+agent-framework-purview>=1.0.0b260709
 azure-identity==1.23.1
 azure-purview-catalog==1.0.0b4
-microsoft-agents-a365-observability-core>=0.6.0
+microsoft-agents-a365-observability-core>=1.0.0
 office365-rest-python-client==2.6.2
 python-dotenv==1.1.1
 requests==2.32.4
