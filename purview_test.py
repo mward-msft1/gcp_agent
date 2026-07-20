@@ -303,7 +303,7 @@ async def main() -> None:
         print(
             "\n  ERROR: PURVIEW_CLIENT_APP_ID is not set.\n"
             "  Add it to your .env file and run again.\n"
-            "  See README – Part B5 for how to get it."
+            "  See README – Part B2 or Part B8 for how to get it."
         )
         return
 
