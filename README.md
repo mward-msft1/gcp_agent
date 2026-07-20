@@ -47,7 +47,7 @@
 | `src/gcp_agent/email_client.py` | Graph `sendMail` with attachment |
 | `src/gcp_agent/a365.py` | Agent 365 observability bootstrap |
 | `.env.example` | Template — copy to `.env` and fill in |
-| `scripts/Create-DlpPolicyForCustomAIApps.ps1` | PowerShell script to create Purview DLP policy (from [microsoft/purview-api-samples](https://github.com/microsoft/purview-api-samples/tree/main/DLPforCustomAIApps)) |
+| `scripts/Create-DlpPolicyForCustomAIApps.ps1` | PowerShell script that can create/reuse Entra app registration, print `.env` values, and create Purview DLP policy (from [microsoft/purview-api-samples](https://github.com/microsoft/purview-api-samples/tree/main/DLPforCustomAIApps)) |
 
 ---
 
@@ -266,15 +266,18 @@ If you skip it, the test still runs but every message will show `ALLOWED`.
 > **Source:** [microsoft/purview-api-samples — DLPforCustomAIApps](https://github.com/microsoft/purview-api-samples/tree/main/DLPforCustomAIApps)  
 > The script is included in this repo at `scripts/Create-DlpPolicyForCustomAIApps.ps1`.
 
-This PowerShell script does everything Step B7 does — and more — in under 2 minutes.
-It creates a DLP policy scoped **directly to your Entra app registration** (not just
-"all Copilot apps"), sets up block rules for 6 sensitive info types, and wires up
-alerts and incident reports.
+This script now does **all of this in one run**:
+
+1. Creates (or reuses) an **Entra app registration** for your agent.
+2. Creates a **client secret** for the app.
+3. Copies that **App (client) ID** into the DLP policy scope automatically.
+4. Creates/updates the Purview DLP policy + rule.
+5. Prints **copy/paste `.env` lines** for this repository.
 
 > **You need:**
 > - PowerShell 7+ (not Windows PowerShell 5)
 > - A Microsoft 365 account with **Compliance Administrator** or **Compliance Data Administrator** role
-> - Your Entra **Application (client) ID** (from Step B2)
+> - Permission to create app registrations in Entra ID
 
 #### Quick start (copy/paste)
 
@@ -292,33 +295,45 @@ Or download from https://aka.ms/PSWindows
 Install-Module ExchangeOnlineManagement -Scope CurrentUser
 ```
 
-**Step 3 — Open `scripts/Create-DlpPolicyForCustomAIApps.ps1` in any text editor and edit these 3 lines:**
+**Step 3 — Install Microsoft Graph PowerShell modules (for Entra app creation):**
 
 ```powershell
-# Line to find:             What to change it to:
-$DlpPolicyName = "Contoso Custom AI Apps - Block Sensitive Data"  # change "Contoso" to your org name
-$Applications = @(
-    @{
-        AppId   = "11111111-1111-1111-1111-111111111111"   # <-- REPLACE with your ENTRA_CLIENT_ID
-        AppName = "GCP Document Routing Agent"              # <-- optional: change display name
-    }
-)
+Install-Module Microsoft.Graph -Scope CurrentUser
 ```
 
-Your `ENTRA_CLIENT_ID` is the same GUID you saved in Step B2.
-
-**Step 4 — Run the script:**
+**Step 4 — Run the script (it creates app + DLP policy in one flow):**
 
 ```powershell
 cd path\to\gcp_agent
 .\scripts\Create-DlpPolicyForCustomAIApps.ps1
 ```
 
-A browser window opens — sign in with your **Compliance Administrator** account.
+When prompted:
+1. Sign in to **Microsoft Graph** (for app creation).
+2. Sign in to **Security & Compliance PowerShell** (for DLP policy creation).
 
-**Step 5 — Confirm it worked:**
+**Step 5 — Copy/paste `.env` values printed by the script**
 
-The script prints the created policy at the end. You should see:
+At the end, you will see output like:
+
+```text
+Copy/paste these lines into your .env file:
+ENTRA_TENANT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+ENTRA_CLIENT_ID=yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy
+PURVIEW_CLIENT_APP_ID=yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy
+ENTRA_CLIENT_SECRET=<generated-secret-value>
+```
+
+Copy those lines directly into your `.env` file.
+
+**Step 6 — Confirm it worked**
+
+```powershell
+python purview_test.py
+```
+
+You should also see the policy in the Purview portal:
+https://compliance.microsoft.com → **Data Loss Prevention** → **Policies**
 
 ```
 Verification:
@@ -331,13 +346,12 @@ Policy        : Contoso Custom AI Apps - Block Sensitive Data
 RestrictAccess: {UploadText=Block, DownloadText=Block}
 ```
 
-Also confirm in the Microsoft Purview portal:  
-https://compliance.microsoft.com → **Data Loss Prevention** → **Policies**
-
 #### What the script creates
 
 | Setting | Value |
 |---------|-------|
+| Entra app registration | Created or reused automatically |
+| App client secret | Created automatically (shown once in output) |
 | Policy scope | Your Entra app only (not all M365 apps) |
 | Action | **Block** (UploadText + DownloadText) |
 | Sensitive info types | Credit Card, SSN, Bank Account, ITIN, Passport, IBAN |
@@ -351,11 +365,14 @@ Open the `# Configuration` section at the top of the script and edit these varia
 
 | Variable | What to change |
 |----------|---------------|
+| `$CreateEntraApp` | `true` to auto-create/reuse app, `false` to use existing app id |
+| `$EntraAppDisplayName` | Name of the Entra app registration to create/reuse |
+| `$ExistingAppClientId` | Existing app id to use when `$CreateEntraApp = $false` |
+| `$CreateClientSecret` | `true` to auto-create secret, `false` to keep your existing secret |
 | `$DlpPolicyName` | Friendly name in the Purview portal |
 | `$DlpRuleName` | Friendly name for the rule |
 | `$PolicyMode` | `Enable` (active), `TestWithNotifications`, `TestWithoutNotifications`, `Disable` |
 | `$RestrictAction` | `Block` to deny, `Audit` to log only |
-| `$Applications` | Add more `@{AppId=...; AppName=...}` entries for additional apps |
 | `$AlertRecipients` | `@("SiteAdmin")` or `@("admin@contoso.com")` |
 | `$SensitiveTypes` | Add or remove sensitive info type names |
 
@@ -707,7 +724,7 @@ Run through this before handing off to a customer:
 - [ ] (If Purview enabled) Files with blocked labels are rejected before send.
 - [ ] `scripts/Create-DlpPolicyForCustomAIApps.ps1` runs and creates the policy in Purview.
 - [ ] `python purview_test.py` runs all 4 scenarios without crashing.
-- [ ] `purview_test.py` shows `BLOCKED` for credit card message (after Step B7 policy activates).
+- [ ] `purview_test.py` shows `BLOCKED` for credit card message (after Step B7 or Step B8 policy activates).
 - [ ] `.env` is NOT committed to the repo (run `git status` — it must not appear).
 
 ---
@@ -719,4 +736,3 @@ Run through this before handing off to a customer:
 3. **Rotate your Entra client secret** before it expires (you set an expiry in Step B3).
 4. **Use the minimum required permissions** — only add permissions you actually use.
 5. **In production**, store all secrets in Google Secret Manager or Azure Key Vault — never as plain text.
-
