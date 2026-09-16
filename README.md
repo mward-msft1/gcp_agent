@@ -47,6 +47,7 @@
 | `src/gcp_agent/email_client.py` | Graph `sendMail` with attachment |
 | `src/gcp_agent/a365.py` | Agent 365 observability bootstrap |
 | `.env.example` | Template — copy to `.env` and fill in |
+| `.github/workflows/weekly-incident-alerts.yml` | Weekly GitHub Actions automation that runs the DLP incident-alert script (see [Part I](#part-i--weekly-incident-alert-automation-github-actions)) |
 | `scripts/Create-DlpPolicyForCustomAIApps.ps1` | PowerShell script that can create/reuse Entra app registration, print `.env` values, and create Purview DLP policy (from [microsoft/purview-api-samples](https://github.com/microsoft/purview-api-samples/tree/main/DLPforCustomAIApps)) |
 
 ---
@@ -719,6 +720,88 @@ Email delivered to recipient
 
 ---
 
+## Part I — Weekly incident-alert automation (GitHub Actions)
+
+The workflow `.github/workflows/weekly-incident-alerts.yml` runs the existing
+script `scripts/Create-DlpPolicyForCustomAIApps.ps1` in unattended mode
+(`-NonInteractive`) so the Purview DLP policy and rule that generate the
+**incident alerts** are re-created/refreshed automatically.
+
+### Schedule
+
+| When | Cron | Timezone |
+|------|------|----------|
+| Every Monday, 06:00 | `0 6 * * 1` | **UTC** (GitHub Actions cron is always UTC) |
+
+The workflow uses least-privilege permissions (`contents: read`) and a
+concurrency group (`weekly-incident-alerts`) so two alert-creation runs can
+never overlap.
+
+### Step I1 — Prepare app-only authentication
+
+Scheduled runs cannot sign in interactively, so Security & Compliance
+PowerShell is used with **app-only certificate authentication**:
+
+1. Create (or reuse) an Entra app registration and grant it the
+   `Exchange.ManageAsApp` application permission, plus the **Compliance
+   Administrator** (or equivalent) role in Microsoft Purview.
+   See [App-only authentication for Exchange Online PowerShell](https://learn.microsoft.com/powershell/exchange/app-only-auth-powershell-v2).
+2. Upload a certificate to that app registration, and base64-encode the matching
+   `.pfx` file:
+
+   ```powershell
+   [Convert]::ToBase64String([IO.File]::ReadAllBytes("C:\path\to\cert.pfx")) | Set-Clipboard
+   ```
+
+### Step I2 — Add the repository secrets and variables
+
+Repository **Settings → Secrets and variables → Actions**.
+
+**Secrets** (never commit these values):
+
+| Secret | Required | What it is |
+|--------|----------|------------|
+| `PURVIEW_DLP_TARGET_APP_ID` | Yes | Entra App (client) ID of the agent app the DLP policy is scoped to (same value as `ENTRA_CLIENT_ID`) |
+| `PURVIEW_DLP_CONNECT_APP_ID` | Yes | Entra App (client) ID used to connect to Security & Compliance PowerShell |
+| `PURVIEW_DLP_CERT_BASE64` | Yes | Base64-encoded `.pfx` certificate for app-only authentication |
+| `PURVIEW_DLP_CERT_PASSWORD` | Only if the `.pfx` has a password | Password of the `.pfx` certificate |
+
+**Variables** (non-secret configuration):
+
+| Variable | Required | Default |
+|----------|----------|---------|
+| `PURVIEW_DLP_ORGANIZATION` | Yes | — (for example `contoso.onmicrosoft.com`) |
+| `PURVIEW_DLP_POLICY_NAME` | No | `Contoso Custom AI Apps - Block Sensitive Data` |
+| `PURVIEW_DLP_RULE_NAME` | No | `Block sensitive info in custom AI apps` |
+| `PURVIEW_DLP_APP_DISPLAY_NAME` | No | `GCP Document Routing Agent` |
+| `PURVIEW_DLP_POLICY_MODE` | No | `Enable` |
+| `PURVIEW_DLP_RESTRICT_ACTION` | No | `Block` |
+| `PURVIEW_DLP_ALERT_RECIPIENTS` | No | `SiteAdmin` (comma-separated UPNs allowed) |
+| `PURVIEW_DLP_INCIDENT_RECIPIENTS` | No | `SiteAdmin` (comma-separated UPNs allowed) |
+| `PURVIEW_DLP_NOTIFY_RECIPIENTS` | No | `SiteAdmin` (comma-separated UPNs allowed) |
+| `PURVIEW_DLP_REPORT_SEVERITY` | No | `High` |
+
+If any required secret/variable is missing, the workflow fails early with a
+message naming the missing values.
+
+### Step I3 — Run it manually (on demand)
+
+1. Go to the **Actions** tab.
+2. Select **Weekly Purview incident alerts**.
+3. Click **Run workflow** (this is the `workflow_dispatch` trigger).
+
+You can also run the same unattended path locally:
+
+```powershell
+$env:PURVIEW_DLP_TARGET_APP_ID   = "<agent-app-client-id>"
+$env:PURVIEW_DLP_CONNECT_APP_ID  = "<app-only-client-id>"
+$env:PURVIEW_DLP_CERT_BASE64     = "<base64-pfx>"
+$env:PURVIEW_DLP_ORGANIZATION    = "contoso.onmicrosoft.com"
+.\scripts\Create-DlpPolicyForCustomAIApps.ps1 -NonInteractive
+```
+
+---
+
 ## Quick validation checklist
 
 Run through this before handing off to a customer:
@@ -732,6 +815,7 @@ Run through this before handing off to a customer:
 - [ ] `python purview_test.py` runs all 4 scenarios without crashing.
 - [ ] `purview_test.py` shows `BLOCKED` for credit card message (after Step B7 or Step B8 policy activates).
 - [ ] `.env` is NOT committed to the repo (run `git status` — it must not appear).
+- [ ] The **Weekly Purview incident alerts** workflow succeeds when triggered manually from the Actions tab.
 
 ---
 
