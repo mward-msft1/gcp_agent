@@ -13,50 +13,89 @@
       4) Creates or updates DLP policy + rule for custom AI apps.
       5) Prints copy/paste .env lines for this repository.
 
+    Use -NonInteractive for unattended runs (for example the weekly
+    "Weekly Purview incident alerts" GitHub Actions workflow). In that mode the
+    script never prompts, reads its configuration from environment variables,
+    reuses an existing Entra app (PURVIEW_DLP_TARGET_APP_ID), connects to
+    Security & Compliance PowerShell with app-only certificate authentication,
+    and fails with a clear error when required configuration is missing.
+
     Source baseline:
       https://github.com/microsoft/purview-api-samples/tree/main/DLPforCustomAIApps
 #>
 
 [CmdletBinding()]
 param(
-    [bool]$CreateEntraApp = $true
+    [bool]$CreateEntraApp = $true,
+
+    # Unattended mode (GitHub Actions / scheduled automation).
+    # All values are read from environment variables and the script never prompts.
+    [switch]$NonInteractive
 )
 
 $ErrorActionPreference = "Stop"
+
+if ($NonInteractive -and -not $PSBoundParameters.ContainsKey("CreateEntraApp")) {
+    # Unattended runs never create Entra apps or secrets; they reuse an existing app id.
+    $CreateEntraApp = $false
+}
+
+function Get-EnvValue {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [string]$DefaultValue = ""
+    )
+    $value = [Environment]::GetEnvironmentVariable($Name)
+    if ([string]::IsNullOrWhiteSpace($value)) { return $DefaultValue }
+    return $value.Trim()
+}
+
+function Get-EnvList {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string[]]$DefaultValue
+    )
+    $value = Get-EnvValue -Name $Name
+    if ([string]::IsNullOrWhiteSpace($value)) { return $DefaultValue }
+    return @($value -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+}
 
 # -----------------------------------------------------------------------------
 # Configuration - replace values if needed
 # -----------------------------------------------------------------------------
 
+# Every value below can be overridden with an environment variable, which is how
+# the scheduled GitHub Actions workflow configures unattended runs.
+
 # Entra app creation settings (used when -CreateEntraApp $true).
-$EntraAppDisplayName      = "gcp-document-routing-agent"
+$EntraAppDisplayName      = Get-EnvValue -Name "PURVIEW_DLP_ENTRA_APP_DISPLAY_NAME" -DefaultValue "gcp-document-routing-agent"
 $CreateClientSecret       = $true
 $ClientSecretDisplayName  = "gcp-agent-secret"
 $ClientSecretMonthsValid  = 12
 
 # If you do NOT want this script to create an app, set -CreateEntraApp $false
-# and set this AppId manually.
-$ExistingAppClientId = ""
+# and set this AppId manually (or set PURVIEW_DLP_TARGET_APP_ID).
+$ExistingAppClientId = Get-EnvValue -Name "PURVIEW_DLP_TARGET_APP_ID"
 
 # Friendly names shown in Purview.
-$DlpPolicyName = "Contoso Custom AI Apps - Block Sensitive Data"
-$DlpRuleName   = "Block sensitive info in custom AI apps"
+$DlpPolicyName = Get-EnvValue -Name "PURVIEW_DLP_POLICY_NAME" -DefaultValue "Contoso Custom AI Apps - Block Sensitive Data"
+$DlpRuleName   = Get-EnvValue -Name "PURVIEW_DLP_RULE_NAME"   -DefaultValue "Block sensitive info in custom AI apps"
 
 # Enforcement mode:
 #   Enable | TestWithNotifications | TestWithoutNotifications | Disable
-$PolicyMode = "Enable"
+$PolicyMode = Get-EnvValue -Name "PURVIEW_DLP_POLICY_MODE" -DefaultValue "Enable"
 
 # Rule action on sensitive match: Block | Audit
-$RestrictAction = "Block"
+$RestrictAction = Get-EnvValue -Name "PURVIEW_DLP_RESTRICT_ACTION" -DefaultValue "Block"
 
 # App name shown in Purview DLP locations.
-$PurviewAppDisplayName = "GCP Document Routing Agent"
+$PurviewAppDisplayName = Get-EnvValue -Name "PURVIEW_DLP_APP_DISPLAY_NAME" -DefaultValue "GCP Document Routing Agent"
 
-# Recipients for alerts and incidents ("SiteAdmin" or specific UPNs).
-$AlertRecipients     = @("SiteAdmin")
-$IncidentRecipients  = @("SiteAdmin")
-$NotifyRecipients    = @("SiteAdmin")
-$ReportSeverityLevel = "High"
+# Recipients for alerts and incidents ("SiteAdmin" or specific UPNs, comma separated).
+$AlertRecipients     = Get-EnvList -Name "PURVIEW_DLP_ALERT_RECIPIENTS"    -DefaultValue @("SiteAdmin")
+$IncidentRecipients  = Get-EnvList -Name "PURVIEW_DLP_INCIDENT_RECIPIENTS" -DefaultValue @("SiteAdmin")
+$NotifyRecipients    = Get-EnvList -Name "PURVIEW_DLP_NOTIFY_RECIPIENTS"   -DefaultValue @("SiteAdmin")
+$ReportSeverityLevel = Get-EnvValue -Name "PURVIEW_DLP_REPORT_SEVERITY"    -DefaultValue "High"
 
 # Sensitive information types (Purview built-ins).
 $SensitiveTypes = @(
@@ -83,8 +122,16 @@ function Ensure-Module {
 function Prompt-RequiredValue {
     param(
         [Parameter(Mandatory = $true)][string]$PromptMessage,
-        [string]$DefaultValue = ""
+        [string]$DefaultValue = "",
+        [string]$EnvVarName = ""
     )
+    if ($NonInteractive) {
+        if (-not [string]::IsNullOrWhiteSpace($DefaultValue)) {
+            return $DefaultValue.Trim()
+        }
+        $hint = if ([string]::IsNullOrWhiteSpace($EnvVarName)) { "" } else { " Set the '$EnvVarName' environment variable (GitHub Actions secret or variable)." }
+        throw "Missing required configuration in -NonInteractive mode: $PromptMessage.$hint"
+    }
     while ($true) {
         $raw = if ([string]::IsNullOrWhiteSpace($DefaultValue)) {
             Read-Host $PromptMessage
@@ -171,6 +218,9 @@ if ([string]::IsNullOrWhiteSpace($PurviewAppDisplayName)) {
 }
 
 if ($CreateEntraApp) {
+    if ($NonInteractive) {
+        throw "-CreateEntraApp `$true is not supported with -NonInteractive. Create the Entra app once interactively, then set PURVIEW_DLP_TARGET_APP_ID."
+    }
     $EntraAppDisplayName = Prompt-RequiredValue `
         -PromptMessage "Enter Entra app registration display name" `
         -DefaultValue $EntraAppDisplayName
@@ -187,7 +237,8 @@ if ($CreateEntraApp) {
 else {
     $ExistingAppClientId = Prompt-RequiredValue `
         -PromptMessage "CreateEntraApp is false. Enter existing Entra App (client) ID" `
-        -DefaultValue $ExistingAppClientId
+        -DefaultValue $ExistingAppClientId `
+        -EnvVarName "PURVIEW_DLP_TARGET_APP_ID"
     $resolvedAppId = $ExistingAppClientId
 }
 
@@ -204,7 +255,44 @@ $Applications = @(
 
 Write-Host "Connecting to Security & Compliance PowerShell..." -ForegroundColor Cyan
 Ensure-Module -Name "ExchangeOnlineManagement"
-Connect-IPPSSession
+
+if ($NonInteractive) {
+    # App-only certificate authentication (no interactive sign-in available in CI).
+    $organization = Prompt-RequiredValue `
+        -PromptMessage "Purview organization (tenant domain, e.g. contoso.onmicrosoft.com)" `
+        -DefaultValue (Get-EnvValue -Name "PURVIEW_DLP_ORGANIZATION") `
+        -EnvVarName "PURVIEW_DLP_ORGANIZATION"
+    $connectAppId = Prompt-RequiredValue `
+        -PromptMessage "Entra app (client) ID used to connect to Security & Compliance PowerShell" `
+        -DefaultValue (Get-EnvValue -Name "PURVIEW_DLP_CONNECT_APP_ID") `
+        -EnvVarName "PURVIEW_DLP_CONNECT_APP_ID"
+    $certBase64 = Prompt-RequiredValue `
+        -PromptMessage "Base64-encoded PFX certificate for app-only authentication" `
+        -DefaultValue (Get-EnvValue -Name "PURVIEW_DLP_CERT_BASE64") `
+        -EnvVarName "PURVIEW_DLP_CERT_BASE64"
+    $certPassword = Get-EnvValue -Name "PURVIEW_DLP_CERT_PASSWORD"
+
+    try {
+        $certBytes = [Convert]::FromBase64String($certBase64)
+    }
+    catch {
+        throw "PURVIEW_DLP_CERT_BASE64 is not valid base64 content: $($_.Exception.Message)"
+    }
+
+    $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
+        $certBytes,
+        $certPassword,
+        [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet)
+
+    Connect-IPPSSession `
+        -AppId $connectAppId `
+        -Certificate $certificate `
+        -Organization $organization `
+        -ShowBanner:$false
+}
+else {
+    Connect-IPPSSession
+}
 
 # -----------------------------------------------------------------------------
 # Build policy location payload (scoped to app ids)

@@ -1,0 +1,87 @@
+name: Weekly Purview incident alerts
+
+# Creates/updates the Purview DLP policy and rule that generate the incident
+# alerts, by running the existing repository script
+# scripts/Create-DlpPolicyForCustomAIApps.ps1 in unattended mode.
+
+on:
+  schedule:
+    # Every Monday at 06:00 UTC.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: weekly-incident-alerts
+  cancel-in-progress: false
+
+jobs:
+  create-incident-alerts:
+    name: Create incident alerts
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      # Required secrets
+      PURVIEW_DLP_TARGET_APP_ID: ${{ secrets.PURVIEW_DLP_TARGET_APP_ID }}
+      PURVIEW_DLP_CONNECT_APP_ID: ${{ secrets.PURVIEW_DLP_CONNECT_APP_ID }}
+      PURVIEW_DLP_CERT_BASE64: ${{ secrets.PURVIEW_DLP_CERT_BASE64 }}
+      PURVIEW_DLP_CERT_PASSWORD: ${{ secrets.PURVIEW_DLP_CERT_PASSWORD }}
+      # Required variable
+      PURVIEW_DLP_ORGANIZATION: ${{ vars.PURVIEW_DLP_ORGANIZATION }}
+      # Optional variables (defaults come from the script)
+      PURVIEW_DLP_POLICY_NAME: ${{ vars.PURVIEW_DLP_POLICY_NAME }}
+      PURVIEW_DLP_RULE_NAME: ${{ vars.PURVIEW_DLP_RULE_NAME }}
+      PURVIEW_DLP_APP_DISPLAY_NAME: ${{ vars.PURVIEW_DLP_APP_DISPLAY_NAME }}
+      PURVIEW_DLP_POLICY_MODE: ${{ vars.PURVIEW_DLP_POLICY_MODE }}
+      PURVIEW_DLP_RESTRICT_ACTION: ${{ vars.PURVIEW_DLP_RESTRICT_ACTION }}
+      PURVIEW_DLP_ALERT_RECIPIENTS: ${{ vars.PURVIEW_DLP_ALERT_RECIPIENTS }}
+      PURVIEW_DLP_INCIDENT_RECIPIENTS: ${{ vars.PURVIEW_DLP_INCIDENT_RECIPIENTS }}
+      PURVIEW_DLP_NOTIFY_RECIPIENTS: ${{ vars.PURVIEW_DLP_NOTIFY_RECIPIENTS }}
+      PURVIEW_DLP_REPORT_SEVERITY: ${{ vars.PURVIEW_DLP_REPORT_SEVERITY }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate script syntax
+        shell: pwsh
+        run: |
+          $errors = $null
+          $null = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path ./scripts/Create-DlpPolicyForCustomAIApps.ps1).Path,
+            [ref]$null,
+            [ref]$errors)
+          if ($errors.Count) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
+          Write-Host "Script parsed successfully."
+
+      - name: Verify required configuration
+        shell: pwsh
+        run: |
+          $required = @(
+            "PURVIEW_DLP_TARGET_APP_ID",
+            "PURVIEW_DLP_CONNECT_APP_ID",
+            "PURVIEW_DLP_CERT_BASE64",
+            "PURVIEW_DLP_ORGANIZATION"
+          )
+          $missing = $required | Where-Object {
+            [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_))
+          }
+          if ($missing) {
+            Write-Error ("Missing required GitHub Actions secrets/variables: " + ($missing -join ", "))
+            exit 1
+          }
+          Write-Host "All required configuration is present."
+
+      - name: Install PowerShell modules
+        shell: pwsh
+        run: |
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module ExchangeOnlineManagement -Scope CurrentUser -Force
+
+      - name: Create incident alerts (Purview DLP policy + rule)
+        shell: pwsh
+        run: ./scripts/Create-DlpPolicyForCustomAIApps.ps1 -NonInteractive
